@@ -48,6 +48,7 @@ const Cryptocurrencies = ({ simplified }) => {
                     style={{ width: "40px" }}
                     className="crypto-img"
                     src={currency.iconUrl}
+                    alt="icon"
                   />
                 }
                 hoverable
