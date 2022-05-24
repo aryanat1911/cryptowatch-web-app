@@ -54,16 +54,16 @@ const CryptoDetails = () => {
       value: cryptoDetails.rank ? cryptoDetails.rank : "N/A",
       icon: <NumberOutlined />,
     },
-    {
-      id: "3",
-      title: "24h Volume",
-      value: `$ ${
-        cryptoDetails["24hVolume"] && millify(cryptoDetails["24hVolume"])
-      }`
-        ? cryptoDetails["24hVolume"] && millify(cryptoDetails["24hVolume"])
-        : "N/A",
-      icon: <ThunderboltOutlined />,
-    },
+    // {
+    //   id: "3",
+    //   title: "24h Volume",
+    //   value: `${
+    //     cryptoDetails["24hVolume"] && millify(cryptoDetails["24hVolume"])
+    //   }`
+    //     ? cryptoDetails["24hVolume"] && millify(cryptoDetails["24hVolume"])
+    //     : "N/A",
+    //   icon: <ThunderboltOutlined />,
+    // },
     {
       id: "4",
       title: "Market Cap",
