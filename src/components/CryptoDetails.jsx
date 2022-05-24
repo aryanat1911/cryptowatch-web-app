@@ -12,7 +12,6 @@ import {
   TrophyOutlined,
   CheckOutlined,
   NumberOutlined,
-  ThunderboltOutlined,
 } from "@ant-design/icons";
 
 import {
