@@ -11,6 +11,11 @@ import {
 import "./App.css";
 
 const App = () => {
+
+ const functionReWatcher = () => {
+    return "functionReWatcher";
+  };
+  
   return (
     <div className="app">
       <div className="navbar">
