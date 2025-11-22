@@ -25,6 +25,9 @@ const App = () => {
    const functionReWatcher3 = () => {
     return "functionReWatcher";
   };
+   const functionReWatcher4 = () => {
+    return "functionReWatcher";
+  };
   
   return (
     <div className="app">
