@@ -1,27 +1,151 @@
-- name: Fetch source pull request head
-    env:
-      SOURCE_FETCH_TOKEN: ${{ secrets.CHERRY_PICK_SOURCE_REPO_TOKEN }}
-    run: |
-      set -euo pipefail
+ name: Cherry Pick Pull Request
 
-      echo "source_owner=${{ inputs.source_owner }}"
-      echo "source_repo=${{ inputs.source_repo }}"
-      echo "source_branch=${{ inputs.source_branch }}"
+  run-name: Cherry-pick PR #${{ inputs.source_pull_number }} into ${{ inputs.target_branch }}
 
-      if [ -z "$SOURCE_FETCH_TOKEN" ]; then
-        echo "Missing CHERRY_PICK_SOURCE_REPO_TOKEN"
-        exit 1
-      fi
+  on:
+    workflow_dispatch:
+      inputs:
+        source_owner:
+          description: Source repository owner
+          required: true
+          type: string
+        source_repo:
+          description: Source repository name
+          required: true
+          type: string
+        source_pull_number:
+          description: Source pull request number
+          required: true
+          type: string
+        source_branch:
+          description: Source pull request branch
+          required: true
+          type: string
+        target_branch:
+          description: Target branch to cherry-pick onto
+          required: true
+          type: string
+        target_owner:
+          description: Target repository owner
+          required: true
+          type: string
+        target_repo:
+          description: Target repository name
+          required: true
+          type: string
+        new_branch_name:
+          description: New branch to create for the cherry-pick
+          required: true
+          type: string
+        commit_shas:
+          description: Comma-separated commit shas
+          required: true
+          type: string
 
-      echo "Checking API access..."
-      curl -i -sS \
-        -H "Authorization: Bearer $SOURCE_FETCH_TOKEN" \
-        -H "Accept: application/vnd.github+json" \
-        https://api.github.com/repos/${{ inputs.source_owner }}/${{ inputs.source_repo }}
+  permissions:
+    contents: write
+    pull-requests: write
 
-      echo
-      echo "Checking git access..."
-      git ls-remote "https://x-access-token:${SOURCE_FETCH_TOKEN}@github.com/${{ inputs.source_owner }}/${{ inputs.source_repo }}.git" HEAD
+  jobs:
+    cherry-pick:
+      runs-on: ubuntu-latest
+      steps:
+        - name: Checkout target branch
+          uses: actions/checkout@v4
+          with:
+            fetch-depth: 0
+            ref: ${{ inputs.target_branch }}
 
-      git remote add source "https://x-access-token:${SOURCE_FETCH_TOKEN}@github.com/${{ inputs.source_owner }}/${{ inputs.source_repo }}.git"
-      git fetch --no-tags source "${{ inputs.source_branch }}:refs/remotes/source/${{ inputs.source_branch }}"
+        - name: Fetch source pull request head
+          env:
+            SOURCE_FETCH_TOKEN: ${{ secrets.CHERRY_PICK_SOURCE_REPO_TOKEN }}
+          run: |
+            set -euo pipefail
+
+            echo "source_owner=${{ inputs.source_owner }}"
+            echo "source_repo=${{ inputs.source_repo }}"
+            echo "source_branch=${{ inputs.source_branch }}"
+
+            if [ -z "$SOURCE_FETCH_TOKEN" ]; then
+              echo "Missing CHERRY_PICK_SOURCE_REPO_TOKEN"
+              exit 1
+            fi
+
+            echo "Checking API access..."
+            curl -i -sS \
+              -H "Authorization: Bearer $SOURCE_FETCH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              https://api.github.com/repos/${{ inputs.source_owner }}/${{ inputs.source_repo }}
+
+            echo
+            echo "Checking git access..."
+            git ls-remote "https://x-access-token:${SOURCE_FETCH_TOKEN}@github.com/${{ inputs.source_owner }}/${{ inputs.source_repo }}.git" HEAD
+
+            git remote add source "https://x-access-token:${SOURCE_FETCH_TOKEN}@github.com/${{ inputs.source_owner }}/${{ inputs.source_repo }}.git"
+            git fetch --no-tags source "${{ inputs.source_branch }}:refs/remotes/source/${{ inputs.source_branch }}"
+
+        - name: Configure git identity
+          run: |
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+        - name: Create working branch
+          run: |
+            git switch -c "${{ inputs.new_branch_name }}"
+
+        - name: Cherry-pick commits
+          id: cherry_pick
+          env:
+            COMMIT_SHAS: ${{ inputs.commit_shas }}
+          run: |
+            set -euo pipefail
+            IFS=',' read -r -a commits <<< "$COMMIT_SHAS"
+            duplicates=()
+            applied=()
+
+            for sha in "${commits[@]}"; do
+              if ! git cat-file -e "$sha^{commit}" 2>/dev/null; then
+                echo "missing_commit=$sha" >> "$GITHUB_OUTPUT"
+                exit 1
+              fi
+
+              if git merge-base --is-ancestor "$sha" HEAD; then
+                duplicates+=("$sha")
+                continue
+              fi
+
+              if git cherry-pick -x "$sha"; then
+                applied+=("$sha")
+              else
+                echo "conflicting_commit=$sha" >> "$GITHUB_OUTPUT"
+                git cherry-pick --abort || true
+                exit 1
+              fi
+            done
+
+            if [ "${#applied[@]}" -eq 0 ]; then
+              echo "applied_count=0" >> "$GITHUB_OUTPUT"
+            else
+              echo "applied_count=${#applied[@]}" >> "$GITHUB_OUTPUT"
+            fi
+
+        - name: Push branch
+          if: steps.cherry_pick.outputs.applied_count != '0'
+          run: |
+            git push --set-upstream origin "${{ inputs.new_branch_name }}"
+
+        - name: Create pull request
+          if: steps.cherry_pick.outputs.applied_count != '0'
+          uses: actions/github-script@v7
+          with:
+            script: |
+              const response = await github.rest.pulls.create({
+                owner: "${{ inputs.target_owner }}",
+                repo: "${{ inputs.target_repo }}",
+                title: `Cherry-pick PR #${{ inputs.source_pull_number }} into ${{ inputs.target_branch }}`,
+                head: "${{ inputs.new_branch_name }}",
+                base: "${{ inputs.target_branch }}",
+                body: `Automated cherry-pick of commits from ${{ inputs.source_owner }}/${{ inputs.source_repo }}#${{ inputs.source_pull_number }}`
+              });
+
+              await core.summary.addRaw(`Created PR: ${response.data.html_url}`).write();
