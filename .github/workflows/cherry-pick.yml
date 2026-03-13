@@ -1,8 +1,18 @@
 name: Cherry Pick Pull Request
 
+run-name: Cherry-pick PR #${{ inputs.source_pull_number }} into ${{ inputs.target_branch }}
+
 on:
   workflow_dispatch:
     inputs:
+      source_owner:
+        description: Source repository owner
+        required: true
+        type: string
+      source_repo:
+        description: Source repository name
+        required: true
+        type: string
       source_pull_number:
         description: Source pull request number
         required: true
@@ -46,6 +56,11 @@ jobs:
           fetch-depth: 0
           ref: ${{ inputs.target_branch }}
 
+      - name: Fetch source pull request head
+        run: |
+          git remote add source "https://github.com/${{ inputs.source_owner }}/${{ inputs.source_repo }}.git"
+          git fetch --no-tags source "${{ inputs.source_branch }}:refs/remotes/source/${{ inputs.source_branch }}"
+
       - name: Configure git identity
         run: |
           git config user.name "github-actions[bot]"
@@ -66,6 +81,18 @@ jobs:
           applied=()
 
           for sha in "${commits[@]}"; do
+            if ! git cat-file -e "$sha^{commit}" 2>/dev/null; then
+              echo "missing_commit=$sha" >> "$GITHUB_OUTPUT"
+              {
+                echo "## Cherry-pick failed"
+                echo ""
+                echo "Commit not available locally: \`$sha\`"
+                echo ""
+                echo "The workflow fetched the source repository branch but still could not resolve this commit."
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+
             if git merge-base --is-ancestor "$sha" HEAD; then
               duplicates+=("$sha")
               continue
@@ -117,6 +144,17 @@ jobs:
       - name: Push branch
         if: steps.cherry_pick.outputs.applied_count != '0'
         run: |
+          if git ls-remote --exit-code --heads origin "${{ inputs.new_branch_name }}" >/dev/null 2>&1; then
+            {
+              echo "## Cherry-pick failed"
+              echo ""
+              echo "Remote branch already exists: \`${{ inputs.new_branch_name }}\`"
+              echo ""
+              echo "Re-run the cherry-pick to generate a fresh branch name."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
           git push --set-upstream origin "${{ inputs.new_branch_name }}"
 
       - name: Create pull request
@@ -126,8 +164,9 @@ jobs:
           script: |
             const title = `Cherry-pick PR #${{ inputs.source_pull_number }} into ${{ inputs.target_branch }}`;
             const body = [
-              `Automated cherry-pick of commits from #${{ inputs.source_pull_number }}`,
+              `Automated cherry-pick of commits from ${{ inputs.source_owner }}/${{ inputs.source_repo }}#${{ inputs.source_pull_number }}`,
               ``,
+              `Source repository: \`${{ inputs.source_owner }}/${{ inputs.source_repo }}\``,
               `Source branch: \`${{ inputs.source_branch }}\``,
               `Target branch: \`${{ inputs.target_branch }}\``
             ].join("\n");
