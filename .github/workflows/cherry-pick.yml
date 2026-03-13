@@ -85,10 +85,15 @@ jobs:
 
           echo
           echo "Checking git access..."
-          git ls-remote "https://x-access-token:${SOURCE_FETCH_TOKEN}@github.com/${{ inputs.source_owner }}/${{ inputs.source_repo }}.git" HEAD
+          AUTH_HEADER="$(printf 'x-access-token:%s' "$SOURCE_FETCH_TOKEN" | base64)"
+          SOURCE_REMOTE_URL="https://github.com/${{ inputs.source_owner }}/${{ inputs.source_repo }}.git"
 
-          git remote add source "https://x-access-token:${SOURCE_FETCH_TOKEN}@github.com/${{ inputs.source_owner }}/${{ inputs.source_repo }}.git"
-          git fetch --no-tags source "${{ inputs.source_branch }}:refs/remotes/source/${{ inputs.source_branch }}"
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $AUTH_HEADER" \
+            ls-remote "$SOURCE_REMOTE_URL" HEAD
+
+          git remote add source "$SOURCE_REMOTE_URL"
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $AUTH_HEADER" \
+            fetch --no-tags source "${{ inputs.source_branch }}:refs/remotes/source/${{ inputs.source_branch }}"
 
       - name: "Configure git identity"
         run: |
