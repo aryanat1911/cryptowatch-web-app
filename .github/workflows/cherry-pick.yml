@@ -57,8 +57,21 @@ jobs:
           ref: ${{ inputs.target_branch }}
 
       - name: Fetch source pull request head
+        env:
+          SOURCE_FETCH_TOKEN: ${{ secrets.CHERRY_PICK_SOURCE_REPO_TOKEN }}
         run: |
-          git remote add source "https://github.com/${{ inputs.source_owner }}/${{ inputs.source_repo }}.git"
+          if [ -z "$SOURCE_FETCH_TOKEN" ]; then
+            {
+              echo "## Cherry-pick failed"
+              echo ""
+              echo "Missing repository secret: \`CHERRY_PICK_SOURCE_REPO_TOKEN\`"
+              echo ""
+              echo "Configure a token that can read the source repository \`${{ inputs.source_owner }}/${{ inputs.source_repo }}\`."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          git remote add source "https://x-access-token:${SOURCE_FETCH_TOKEN}@github.com/${{ inputs.source_owner }}/${{ inputs.source_repo }}.git"
           git fetch --no-tags source "${{ inputs.source_branch }}:refs/remotes/source/${{ inputs.source_branch }}"
 
       - name: Configure git identity
