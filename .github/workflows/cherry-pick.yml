@@ -55,16 +55,13 @@ jobs:
         with:
           fetch-depth: 0
           ref: "${{ inputs.target_branch }}"
+          persist-credentials: false
 
-      - name: "Fetch source pull request head"
+      - name: "Validate source fetch token"
         env:
           SOURCE_FETCH_TOKEN: "${{ secrets.CHERRY_PICK_SOURCE_REPO_TOKEN }}"
         run: |
           set -euo pipefail
-
-          echo "source_owner=${{ inputs.source_owner }}"
-          echo "source_repo=${{ inputs.source_repo }}"
-          echo "source_branch=${{ inputs.source_branch }}"
 
           if [ -z "$SOURCE_FETCH_TOKEN" ]; then
             {
@@ -77,23 +74,26 @@ jobs:
             exit 1
           fi
 
-          echo "Checking API access..."
-          curl -i -sS \
-            -H "Authorization: Bearer $SOURCE_FETCH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${{ inputs.source_owner }}/${{ inputs.source_repo }}"
+      - name: "Checkout source repository"
+        uses: "actions/checkout@v4"
+        with:
+          repository: "${{ inputs.source_owner }}/${{ inputs.source_repo }}"
+          ref: "${{ inputs.source_branch }}"
+          token: "${{ secrets.CHERRY_PICK_SOURCE_REPO_TOKEN }}"
+          fetch-depth: 0
+          path: ".source-repo"
+          persist-credentials: false
 
-          echo
-          echo "Checking git access..."
-          AUTH_HEADER="$(printf 'x-access-token:%s' "$SOURCE_FETCH_TOKEN" | base64)"
-          SOURCE_REMOTE_URL="https://github.com/${{ inputs.source_owner }}/${{ inputs.source_repo }}.git"
+      - name: "Fetch source branch into target repo"
+        run: |
+          set -euo pipefail
 
-          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $AUTH_HEADER" \
-            ls-remote "$SOURCE_REMOTE_URL" HEAD
+          echo "source_owner=${{ inputs.source_owner }}"
+          echo "source_repo=${{ inputs.source_repo }}"
+          echo "source_branch=${{ inputs.source_branch }}"
 
-          git remote add source "$SOURCE_REMOTE_URL"
-          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $AUTH_HEADER" \
-            fetch --no-tags source "${{ inputs.source_branch }}:refs/remotes/source/${{ inputs.source_branch }}"
+          git remote add source "$GITHUB_WORKSPACE/.source-repo"
+          git fetch --no-tags source "${{ inputs.source_branch }}:refs/remotes/source/${{ inputs.source_branch }}"
 
       - name: "Configure git identity"
         run: |
