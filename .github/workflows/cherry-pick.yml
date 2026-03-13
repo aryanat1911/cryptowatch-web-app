@@ -62,6 +62,10 @@ jobs:
         run: |
           set -euo pipefail
 
+          echo "source_owner=${{ inputs.source_owner }}"
+          echo "source_repo=${{ inputs.source_repo }}"
+          echo "source_branch=${{ inputs.source_branch }}"
+
           if [ -z "$SOURCE_FETCH_TOKEN" ]; then
             {
               echo "## Cherry-pick failed"
@@ -72,6 +76,16 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
+
+          echo "Checking API access..."
+          curl -i -sS \
+            -H "Authorization: Bearer $SOURCE_FETCH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ inputs.source_owner }}/${{ inputs.source_repo }}"
+
+          echo
+          echo "Checking git access..."
+          git ls-remote "https://x-access-token:${SOURCE_FETCH_TOKEN}@github.com/${{ inputs.source_owner }}/${{ inputs.source_repo }}.git" HEAD
 
           git remote add source "https://x-access-token:${SOURCE_FETCH_TOKEN}@github.com/${{ inputs.source_owner }}/${{ inputs.source_repo }}.git"
           git fetch --no-tags source "${{ inputs.source_branch }}:refs/remotes/source/${{ inputs.source_branch }}"
