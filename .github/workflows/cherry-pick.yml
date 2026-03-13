@@ -94,6 +94,8 @@ jobs:
 
           git remote add source "$GITHUB_WORKSPACE/.source-repo"
           git fetch --no-tags source "${{ inputs.source_branch }}:refs/remotes/source/${{ inputs.source_branch }}"
+          git remote remove source
+          rm -rf "$GITHUB_WORKSPACE/.source-repo"
 
       - name: "Configure git identity"
         run: |
@@ -136,12 +138,20 @@ jobs:
               applied+=("$sha")
             else
               echo "conflicting_commit=$sha" >> "$GITHUB_OUTPUT"
+              conflicted_files="$(git diff --name-only --diff-filter=U || true)"
               git status --short
               git cherry-pick --abort || true
               {
                 echo "## Cherry-pick failed"
                 echo ""
                 echo "Conflicting commit: \`$sha\`"
+                echo ""
+                echo "Conflicted files:"
+                if [ -n "$conflicted_files" ]; then
+                  printf -- "- %s\n" $conflicted_files
+                else
+                  echo "- unknown"
+                fi
                 echo ""
                 echo "Applied commits before failure:"
                 printf -- "- %s\n" "${applied[@]:-none}"
