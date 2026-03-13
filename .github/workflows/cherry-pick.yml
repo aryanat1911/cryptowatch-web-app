@@ -1,6 +1,6 @@
  name: Cherry Pick Pull Request
 
-  run-name: Cherry-pick PR #${{ inputs.source_pull_number }} into ${{ inputs.target_branch }}
+ run-name: "Cherry-pick PR #${{ inputs.source_pull_number }} into ${{ inputs.target_branch }}"
 
   on:
     workflow_dispatch:
