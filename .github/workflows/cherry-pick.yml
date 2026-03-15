@@ -1,6 +1,6 @@
 name: "Cherry Pick Pull Request"
 
-run-name: "Cherry-pick PR #${{ inputs.source_pull_number }} into ${{ inputs.target_branch }}"
+run-name: "Cherry-pick PR set ${{ inputs.source_pull_numbers }} into ${{ inputs.target_branch }}"
 
 "on":
   workflow_dispatch:
@@ -13,12 +13,16 @@ run-name: "Cherry-pick PR #${{ inputs.source_pull_number }} into ${{ inputs.targ
         description: "Source repository name"
         required: true
         type: string
-      source_pull_number:
-        description: "Source pull request number"
+      source_pull_numbers:
+        description: "Comma-separated source pull request numbers"
         required: true
         type: string
-      source_branch:
-        description: "Source pull request branch"
+      source_primary_branch:
+        description: "Primary source branch used for the initial checkout"
+        required: true
+        type: string
+      source_branches:
+        description: "Comma-separated source branches referenced by the selected pull requests"
         required: true
         type: string
       target_branch:
@@ -78,22 +82,35 @@ jobs:
         uses: "actions/checkout@v4"
         with:
           repository: "${{ inputs.source_owner }}/${{ inputs.source_repo }}"
-          ref: "${{ inputs.source_branch }}"
+          ref: "${{ inputs.source_primary_branch }}"
           token: "${{ secrets.CHERRY_PICK_SOURCE_REPO_TOKEN }}"
           fetch-depth: 0
           path: ".source-repo"
-          persist-credentials: false
+          persist-credentials: true
 
-      - name: "Fetch source branch into target repo"
+      - name: "Fetch source branches into target repo"
         run: |
           set -euo pipefail
 
           echo "source_owner=${{ inputs.source_owner }}"
           echo "source_repo=${{ inputs.source_repo }}"
-          echo "source_branch=${{ inputs.source_branch }}"
+          echo "source_pull_numbers=${{ inputs.source_pull_numbers }}"
+          echo "source_branches=${{ inputs.source_branches }}"
+
+          IFS=',' read -r -a source_branches <<< "${{ inputs.source_branches }}"
+
+          for branch in "${source_branches[@]}"; do
+            [ -z "$branch" ] && continue
+            git -C "$GITHUB_WORKSPACE/.source-repo" fetch --no-tags origin "${branch}:refs/remotes/origin/${branch}"
+          done
 
           git remote add source "$GITHUB_WORKSPACE/.source-repo"
-          git fetch --no-tags source "${{ inputs.source_branch }}:refs/remotes/source/${{ inputs.source_branch }}"
+
+          for branch in "${source_branches[@]}"; do
+            [ -z "$branch" ] && continue
+            git fetch --no-tags source "refs/remotes/origin/${branch}:refs/remotes/source/${branch}"
+          done
+
           git remote remove source
           rm -rf "$GITHUB_WORKSPACE/.source-repo"
 
@@ -251,13 +268,17 @@ jobs:
             const appliedCommits = (process.env.APPLIED_COMMITS || "").split(",").filter(Boolean);
             const duplicateCommits = (process.env.DUPLICATE_COMMITS || "").split(",").filter(Boolean);
             const conflictedFiles = (process.env.CONFLICTED_FILES || "").split("\n").filter(Boolean);
+            const sourcePullNumbers = "${{ inputs.source_pull_numbers }}".split(",").filter(Boolean);
             const hasConflict = process.env.HAS_CONFLICT === "true";
-            const title = `Cherry-pick PR #${{ inputs.source_pull_number }} into ${{ inputs.target_branch }}`;
+            const title = sourcePullNumbers.length === 1
+              ? `Cherry-pick PR #${sourcePullNumbers[0]} into ${{ inputs.target_branch }}`
+              : `Cherry-pick PR set (${sourcePullNumbers.join(", ")}) into ${{ inputs.target_branch }}`;
             const bodyLines = [
-              `Automated cherry-pick of commits from ${{ inputs.source_owner }}/${{ inputs.source_repo }}#${{ inputs.source_pull_number }}`,
+              `Automated cherry-pick of commits from ${{ inputs.source_owner }}/${{ inputs.source_repo }}`,
               ``,
               `Source repository: \`${{ inputs.source_owner }}/${{ inputs.source_repo }}\``,
-              `Source branch: \`${{ inputs.source_branch }}\``,
+              `Source pull requests: ${sourcePullNumbers.map((pullNumber) => `#${pullNumber}`).join(", ")}`,
+              `Source branches: \`${{ inputs.source_branches }}\``,
               `Target branch: \`${{ inputs.target_branch }}\``
             ];
 
