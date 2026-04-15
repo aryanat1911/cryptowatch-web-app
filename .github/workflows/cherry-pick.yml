@@ -134,6 +134,7 @@ jobs:
           applied=()
           conflict_detected=false
           conflicting_commit=""
+          conflicting_subject=""
           conflicted_files=""
 
           for sha in "${commits[@]}"; do
@@ -158,38 +159,19 @@ jobs:
               applied+=("$sha")
             else
               conflicted_files="$(git diff --name-only --diff-filter=U || true)"
+              conflicting_subject="$(git log -1 --format=%s "$sha" 2>/dev/null || true)"
               git status --short
               git cherry-pick --abort || true
               conflict_detected=true
               conflicting_commit="$sha"
               echo "conflicting_commit=$sha" >> "$GITHUB_OUTPUT"
 
-              if [ "${#applied[@]}" -eq 0 ]; then
-                {
-                  echo "## Cherry-pick failed"
-                  echo ""
-                  echo "Conflicting commit: \`$sha\`"
-                  echo ""
-                  echo "Conflicted files:"
-                  if [ -n "$conflicted_files" ]; then
-                    while IFS= read -r file; do
-                      [ -n "$file" ] && printf -- "- %s\n" "$file"
-                    done <<< "$conflicted_files"
-                  else
-                    echo "- unknown"
-                  fi
-                  echo ""
-                  echo "Applied commits before failure:"
-                  echo "- none"
-                } >> "$GITHUB_STEP_SUMMARY"
-                exit 1
-              fi
-
               break
             fi
           done
 
           echo "has_conflict=$conflict_detected" >> "$GITHUB_OUTPUT"
+          echo "conflicting_subject=$conflicting_subject" >> "$GITHUB_OUTPUT"
           echo "applied_commits=$(IFS=,; echo "${applied[*]}")" >> "$GITHUB_OUTPUT"
           echo "duplicate_commits=$(IFS=,; echo "${duplicates[*]}")" >> "$GITHUB_OUTPUT"
           {
@@ -224,6 +206,10 @@ jobs:
             if [ "$conflict_detected" = true ]; then
               echo ""
               echo "Stopped on conflicting commit: \`$conflicting_commit\`"
+              if [ -n "$conflicting_subject" ]; then
+                echo ""
+                echo "Conflicting commit subject: $conflicting_subject"
+              fi
               echo ""
               echo "Conflicted files:"
               if [ -n "$conflicted_files" ]; then
@@ -234,12 +220,58 @@ jobs:
                 echo "- unknown"
               fi
               echo ""
-              echo "A draft pull request will be opened for the successfully applied commits."
+              if [ "${#applied[@]}" -eq 0 ]; then
+                echo "No commits were applied before the conflict."
+                echo "A draft pull request will be opened with a generated conflict report commit."
+              else
+                echo "A draft pull request will be opened for the successfully applied commits."
+              fi
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: "Create conflict handoff commit"
+        if: "${{ steps.cherry_pick.outputs.has_conflict == 'true' && steps.cherry_pick.outputs.applied_count == '0' }}"
+        env:
+          CONFLICTING_COMMIT: "${{ steps.cherry_pick.outputs.conflicting_commit }}"
+          CONFLICTING_SUBJECT: "${{ steps.cherry_pick.outputs.conflicting_subject }}"
+          CONFLICTED_FILES: "${{ steps.cherry_pick.outputs.conflicted_files }}"
+        run: |
+          set -euo pipefail
+
+          mkdir -p .github
+          cat > .github/cherry-pick-conflict-report.md <<EOF
+          # Cherry-pick conflict report
+
+          Source repository: ${{ inputs.source_owner }}/${{ inputs.source_repo }}
+          Source pull requests: ${{ inputs.source_pull_numbers }}
+          Source branches: ${{ inputs.source_branches }}
+          Target repository: ${{ inputs.target_owner }}/${{ inputs.target_repo }}
+          Target branch: ${{ inputs.target_branch }}
+
+          Conflicting commit: $CONFLICTING_COMMIT
+          Conflicting subject: $CONFLICTING_SUBJECT
+
+          Conflicted files:
+          EOF
+
+          if [ -n "$CONFLICTED_FILES" ]; then
+            while IFS= read -r file; do
+              [ -n "$file" ] && printf -- "- %s\n" "$file" >> .github/cherry-pick-conflict-report.md
+            done <<< "$CONFLICTED_FILES"
+          else
+            echo "- unknown" >> .github/cherry-pick-conflict-report.md
+          fi
+
+          cat >> .github/cherry-pick-conflict-report.md <<EOF
+
+          Manual resolution is required. This branch was created so a draft pull request can be opened even though the cherry-pick stopped on the first conflicting commit.
+          EOF
+
+          git add .github/cherry-pick-conflict-report.md
+          git commit -m "Add cherry-pick conflict report"
+
       - name: "Push branch"
-        if: "${{ steps.cherry_pick.outputs.applied_count != '0' }}"
+        if: "${{ steps.cherry_pick.outputs.applied_count != '0' || steps.cherry_pick.outputs.has_conflict == 'true' }}"
         run: |
           if git ls-remote --exit-code --heads origin "${{ inputs.new_branch_name }}" >/dev/null 2>&1; then
             {
@@ -255,14 +287,16 @@ jobs:
           git push --set-upstream origin "${{ inputs.new_branch_name }}"
 
       - name: "Create pull request"
-        if: "${{ steps.cherry_pick.outputs.applied_count != '0' }}"
+        if: "${{ steps.cherry_pick.outputs.applied_count != '0' || steps.cherry_pick.outputs.has_conflict == 'true' }}"
         uses: "actions/github-script@v7"
         env:
           APPLIED_COMMITS: "${{ steps.cherry_pick.outputs.applied_commits }}"
           DUPLICATE_COMMITS: "${{ steps.cherry_pick.outputs.duplicate_commits }}"
           CONFLICTING_COMMIT: "${{ steps.cherry_pick.outputs.conflicting_commit }}"
+          CONFLICTING_SUBJECT: "${{ steps.cherry_pick.outputs.conflicting_subject }}"
           CONFLICTED_FILES: "${{ steps.cherry_pick.outputs.conflicted_files }}"
           HAS_CONFLICT: "${{ steps.cherry_pick.outputs.has_conflict }}"
+          APPLIED_COUNT: "${{ steps.cherry_pick.outputs.applied_count }}"
         with:
           script: |
             const appliedCommits = (process.env.APPLIED_COMMITS || "").split(",").filter(Boolean);
@@ -270,6 +304,7 @@ jobs:
             const conflictedFiles = (process.env.CONFLICTED_FILES || "").split("\n").filter(Boolean);
             const sourcePullNumbers = "${{ inputs.source_pull_numbers }}".split(",").filter(Boolean);
             const hasConflict = process.env.HAS_CONFLICT === "true";
+            const appliedCount = Number(process.env.APPLIED_COUNT || "0");
             const title = sourcePullNumbers.length === 1
               ? `Cherry-pick PR #${sourcePullNumbers[0]} into ${{ inputs.target_branch }}`
               : `Cherry-pick PR set (${sourcePullNumbers.join(", ")}) into ${{ inputs.target_branch }}`;
@@ -298,13 +333,22 @@ jobs:
 
             if (hasConflict) {
               bodyLines.push("", `Stopped on conflicting commit: \`${process.env.CONFLICTING_COMMIT}\``);
+              if (process.env.CONFLICTING_SUBJECT) {
+                bodyLines.push(`Conflicting subject: ${process.env.CONFLICTING_SUBJECT}`);
+              }
               bodyLines.push("", "Conflicted files:");
               if (conflictedFiles.length > 0) {
                 bodyLines.push(...conflictedFiles.map((file) => `- \`${file}\``));
               } else {
                 bodyLines.push("- unknown");
               }
-              bodyLines.push("", "Manual resolution is required before this branch is ready to merge.");
+              if (appliedCount === 0) {
+                bodyLines.push("", "No source commits were applied before the conflict.");
+                bodyLines.push("A placeholder conflict report commit was added so this draft PR could be created.");
+                bodyLines.push("See `.github/cherry-pick-conflict-report.md` in this branch for the recorded conflict details.");
+              } else {
+                bodyLines.push("", "Manual resolution is required before this branch is ready to merge.");
+              }
             }
 
             const body = bodyLines.join("\n");
