@@ -54,27 +54,58 @@ jobs:
   cherry-pick:
     runs-on: "ubuntu-latest"
     steps:
+      - name: "Create target repository app token"
+        id: "target_app_token"
+        uses: "actions/create-github-app-token@v2"
+        with:
+          app-id: "${{ vars.CHERRY_PICK_APP_ID }}"
+          private-key: "${{ secrets.CHERRY_PICK_APP_PRIVATE_KEY }}"
+          owner: "${{ inputs.target_owner }}"
+          repositories: "${{ inputs.target_repo }}"
+
+      - name: "Create source repository app token"
+        id: "source_app_token"
+        uses: "actions/create-github-app-token@v2"
+        with:
+          app-id: "${{ vars.CHERRY_PICK_APP_ID }}"
+          private-key: "${{ secrets.CHERRY_PICK_APP_PRIVATE_KEY }}"
+          owner: "${{ inputs.source_owner }}"
+          repositories: "${{ inputs.source_repo }}"
+
       - name: "Checkout target branch"
         uses: "actions/checkout@v4"
         with:
           ref: "${{ inputs.target_branch }}"
           fetch-depth: 0
-          token: "${{ github.token }}"
+          repository: "${{ inputs.target_owner }}/${{ inputs.target_repo }}"
+          token: "${{ steps.target_app_token.outputs.token }}"
           persist-credentials: true
 
-      - name: "Validate source fetch token"
+      - name: "Validate GitHub App tokens"
         env:
-          SOURCE_FETCH_TOKEN: "${{ secrets.CHERRY_PICK_SOURCE_REPO_TOKEN }}"
+          TARGET_FETCH_TOKEN: "${{ steps.target_app_token.outputs.token }}"
+          SOURCE_FETCH_TOKEN: "${{ steps.source_app_token.outputs.token }}"
         run: |
           set -euo pipefail
 
-          if [ -z "$SOURCE_FETCH_TOKEN" ]; then
+          if [ -z "${TARGET_FETCH_TOKEN:-}" ]; then
             {
               echo "## Cherry-pick failed"
               echo ""
-              echo "Missing repository secret: \`CHERRY_PICK_SOURCE_REPO_TOKEN\`"
+              echo "Unable to create a GitHub App token for the target repository."
               echo ""
-              echo "Configure a token that can read the source repository \`${{ inputs.source_owner }}/${{ inputs.source_repo }}\`."
+              echo "Confirm the GitHub App is installed on \`${{ inputs.target_owner }}/${{ inputs.target_repo }}\` and that \`CHERRY_PICK_APP_ID\` and \`CHERRY_PICK_APP_PRIVATE_KEY\` are configured in the target repo."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          if [ -z "${SOURCE_FETCH_TOKEN:-}" ]; then
+            {
+              echo "## Cherry-pick failed"
+              echo ""
+              echo "Unable to create a GitHub App token for the source repository."
+              echo ""
+              echo "Confirm the GitHub App is installed on \`${{ inputs.source_owner }}/${{ inputs.source_repo }}\` and that \`CHERRY_PICK_APP_ID\` and \`CHERRY_PICK_APP_PRIVATE_KEY\` are configured in the target repo."
             } >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
@@ -84,7 +115,7 @@ jobs:
         with:
           repository: "${{ inputs.source_owner }}/${{ inputs.source_repo }}"
           ref: "${{ inputs.source_primary_branch }}"
-          token: "${{ secrets.CHERRY_PICK_SOURCE_REPO_TOKEN }}"
+          token: "${{ steps.source_app_token.outputs.token }}"
           fetch-depth: 0
           path: ".source-repo"
           persist-credentials: false
@@ -290,15 +321,8 @@ jobs:
       - name: "Create pull request"
         if: "${{ steps.cherry_pick.outputs.applied_count != '0' || steps.cherry_pick.outputs.has_conflict == 'true' }}"
         uses: "actions/github-script@v7"
-        env:
-          APPLIED_COMMITS: "${{ steps.cherry_pick.outputs.applied_commits }}"
-          DUPLICATE_COMMITS: "${{ steps.cherry_pick.outputs.duplicate_commits }}"
-          CONFLICTING_COMMIT: "${{ steps.cherry_pick.outputs.conflicting_commit }}"
-          CONFLICTING_SUBJECT: "${{ steps.cherry_pick.outputs.conflicting_subject }}"
-          CONFLICTED_FILES: "${{ steps.cherry_pick.outputs.conflicted_files }}"
-          HAS_CONFLICT: "${{ steps.cherry_pick.outputs.has_conflict }}"
-          APPLIED_COUNT: "${{ steps.cherry_pick.outputs.applied_count }}"
         with:
+          github-token: "${{ steps.target_app_token.outputs.token }}"
           script: |
             const appliedCommits = (process.env.APPLIED_COMMITS || "").split(",").filter(Boolean);
             const duplicateCommits = (process.env.DUPLICATE_COMMITS || "").split(",").filter(Boolean);
@@ -337,12 +361,14 @@ jobs:
               if (process.env.CONFLICTING_SUBJECT) {
                 bodyLines.push(`Conflicting subject: ${process.env.CONFLICTING_SUBJECT}`);
               }
+
               bodyLines.push("", "Conflicted files:");
               if (conflictedFiles.length > 0) {
                 bodyLines.push(...conflictedFiles.map((file) => `- \`${file}\``));
               } else {
                 bodyLines.push("- unknown");
               }
+
               if (appliedCount === 0) {
                 bodyLines.push("", "No source commits were applied before the conflict.");
                 bodyLines.push("A placeholder conflict report commit was added so this draft PR could be created.");
@@ -353,6 +379,7 @@ jobs:
             }
 
             const body = bodyLines.join("\n");
+
             const response = await github.rest.pulls.create({
               owner: "${{ inputs.target_owner }}",
               repo: "${{ inputs.target_repo }}",
@@ -362,4 +389,13 @@ jobs:
               body,
               draft: hasConflict
             });
-            core.summary.addRaw(`Created PR: ${response.data.html_url}`).write();
+
+            await core.summary.addRaw(`Created PR: ${response.data.html_url}`).write();
+        env:
+          APPLIED_COMMITS: "${{ steps.cherry_pick.outputs.applied_commits }}"
+          DUPLICATE_COMMITS: "${{ steps.cherry_pick.outputs.duplicate_commits }}"
+          CONFLICTING_COMMIT: "${{ steps.cherry_pick.outputs.conflicting_commit }}"
+          CONFLICTING_SUBJECT: "${{ steps.cherry_pick.outputs.conflicting_subject }}"
+          CONFLICTED_FILES: "${{ steps.cherry_pick.outputs.conflicted_files }}"
+          HAS_CONFLICT: "${{ steps.cherry_pick.outputs.has_conflict }}"
+          APPLIED_COUNT: "${{ steps.cherry_pick.outputs.applied_count }}"
