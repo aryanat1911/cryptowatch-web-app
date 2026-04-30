@@ -118,7 +118,7 @@ jobs:
           token: "${{ steps.source_app_token.outputs.token }}"
           fetch-depth: 0
           path: ".source-repo"
-          persist-credentials: false
+          persist-credentials: true
 
       - name: "Fetch source branches into target repo"
         run: |
