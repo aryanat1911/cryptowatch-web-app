@@ -1,0 +1,3 @@
+Broker orchestrator e2e test 20260505120919
+Source and target: aryanat1911/cryptowatch-web-app
+This verifies broker dispatch without direct central workflow access.
